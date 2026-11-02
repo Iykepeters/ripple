@@ -4,6 +4,10 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Extra water (ml) added to today's goal while Heat mode is on.
+// Placeholder default: worth validating with a health professional before promoting it.
+const HEAT_BONUS_ML = 500;
+
 function addDays(dateStr, delta) {
   const d = new Date(dateStr + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + delta);
@@ -11,7 +15,10 @@ function addDays(dateStr, delta) {
 }
 
 async function getUserOr404(userId, res) {
-  const result = await pool.query('SELECT timezone, daily_goal_ml FROM users WHERE id = $1', [userId]);
+  const result = await pool.query(
+    'SELECT timezone, daily_goal_ml, heat_mode FROM users WHERE id = $1',
+    [userId]
+  );
   const user = result.rows[0];
   if (!user) {
     res.status(404).json({ error: 'User not found.' });
@@ -28,7 +35,26 @@ async function getTodayForTimezone(timezone) {
   return rows[0].today;
 }
 
-// POST /api/hydration/log — log an amount of water for today
+// Heat mode only raises TODAY's target, so turning it on never breaks past streak days.
+function todaysGoal(user) {
+  return user.daily_goal_ml + (user.heat_mode ? HEAT_BONUS_ML : 0);
+}
+
+function summarize(user, date, consumedMl) {
+  const goalMl = todaysGoal(user);
+  const percent = goalMl > 0 ? Math.min(100, Math.round((consumedMl / goalMl) * 100)) : 0;
+  return { date, consumedMl, goalMl, percent, heatMode: user.heat_mode, heatBonusMl: HEAT_BONUS_ML };
+}
+
+async function sumForDate(userId, date) {
+  const result = await pool.query(
+    'SELECT COALESCE(SUM(amount_ml), 0) AS total FROM hydration_logs WHERE user_id = $1 AND logged_date = $2',
+    [userId, date]
+  );
+  return Number(result.rows[0].total);
+}
+
+// POST /api/hydration/log: log an amount of water for today
 router.post('/log', requireAuth, async (req, res) => {
   const { amountMl } = req.body;
   if (!Number.isFinite(amountMl) || amountMl <= 0) {
@@ -46,45 +72,46 @@ router.post('/log', requireAuth, async (req, res) => {
       [req.userId, today, Math.round(amountMl)]
     );
 
-    const sumResult = await pool.query(
-      'SELECT COALESCE(SUM(amount_ml), 0) AS total FROM hydration_logs WHERE user_id = $1 AND logged_date = $2',
-      [req.userId, today]
-    );
-    const consumedMl = Number(sumResult.rows[0].total);
-    const goalMl = user.daily_goal_ml;
-    const percent = goalMl > 0 ? Math.min(100, Math.round((consumedMl / goalMl) * 100)) : 0;
-
-    res.status(201).json({ date: today, consumedMl, goalMl, percent });
+    const consumedMl = await sumForDate(req.userId, today);
+    res.status(201).json(summarize(user, today, consumedMl));
   } catch (err) {
     console.error('Log error:', err);
     res.status(500).json({ error: 'Something went wrong logging your water intake.' });
   }
 });
 
-// GET /api/hydration/today — today's progress toward the goal
+// GET /api/hydration/today: today's progress toward the goal
 router.get('/today', requireAuth, async (req, res) => {
   try {
     const user = await getUserOr404(req.userId, res);
     if (!user) return;
 
     const today = await getTodayForTimezone(user.timezone);
-
-    const sumResult = await pool.query(
-      'SELECT COALESCE(SUM(amount_ml), 0) AS total FROM hydration_logs WHERE user_id = $1 AND logged_date = $2',
-      [req.userId, today]
-    );
-    const consumedMl = Number(sumResult.rows[0].total);
-    const goalMl = user.daily_goal_ml;
-    const percent = goalMl > 0 ? Math.min(100, Math.round((consumedMl / goalMl) * 100)) : 0;
-
-    res.json({ date: today, consumedMl, goalMl, percent });
+    const consumedMl = await sumForDate(req.userId, today);
+    res.json(summarize(user, today, consumedMl));
   } catch (err) {
     console.error('Today error:', err);
     res.status(500).json({ error: "Something went wrong fetching today's progress." });
   }
 });
 
-// GET /api/hydration/history?days=7 — daily totals for the streak chain
+// POST /api/hydration/heat-mode: turn Heat mode on or off
+router.post('/heat-mode', requireAuth, async (req, res) => {
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be true or false.' });
+  }
+
+  try {
+    await pool.query('UPDATE users SET heat_mode = $1 WHERE id = $2', [enabled, req.userId]);
+    res.json({ heatMode: enabled });
+  } catch (err) {
+    console.error('Heat mode error:', err);
+    res.status(500).json({ error: 'Something went wrong updating Heat mode.' });
+  }
+});
+
+// GET /api/hydration/history?days=7: daily totals for the streak chain
 router.get('/history', requireAuth, async (req, res) => {
   const days = Math.min(parseInt(req.query.days, 10) || 7, 365);
 
@@ -108,12 +135,8 @@ router.get('/history', requireAuth, async (req, res) => {
     for (let i = days - 1; i >= 0; i--) {
       const date = addDays(today, -i);
       const consumedMl = totalsMap[date] || 0;
-      history.push({
-        date,
-        consumedMl,
-        goalMl: user.daily_goal_ml,
-        hitGoal: user.daily_goal_ml > 0 && consumedMl >= user.daily_goal_ml
-      });
+      const goalMl = date === today ? todaysGoal(user) : user.daily_goal_ml;
+      history.push({ date, consumedMl, goalMl, hitGoal: goalMl > 0 && consumedMl >= goalMl });
     }
 
     res.json({ history });
@@ -123,14 +146,13 @@ router.get('/history', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/hydration/streak — current and longest streak
+// GET /api/hydration/streak: current and longest streak
 router.get('/streak', requireAuth, async (req, res) => {
   try {
     const user = await getUserOr404(req.userId, res);
     if (!user) return;
 
     const today = await getTodayForTimezone(user.timezone);
-    const goal = user.daily_goal_ml;
 
     const logsResult = await pool.query(
       'SELECT logged_date::text AS date, SUM(amount_ml) AS total FROM hydration_logs WHERE user_id = $1 GROUP BY logged_date',
@@ -139,19 +161,22 @@ router.get('/streak', requireAuth, async (req, res) => {
     const totalsMap = {};
     logsResult.rows.forEach(r => { totalsMap[r.date] = Number(r.total); });
 
-    const todayMl = totalsMap[today] || 0;
-    let offset = goal > 0 && todayMl >= goal ? 0 : 1;
+    const goalFor = (d) => (d === today ? todaysGoal(user) : user.daily_goal_ml);
+    const hit = (d) => {
+      const g = goalFor(d);
+      return g > 0 && (totalsMap[d] || 0) >= g;
+    };
+
+    let offset = hit(today) ? 0 : 1;
     let current = 0;
     while (offset <= 3650) {
-      const ds = addDays(today, -offset);
-      const ml = totalsMap[ds] || 0;
-      if (goal > 0 && ml >= goal) {
+      if (hit(addDays(today, -offset))) {
         current++;
         offset++;
       } else break;
     }
 
-    const hitDates = Object.keys(totalsMap).filter(d => goal > 0 && totalsMap[d] >= goal).sort();
+    const hitDates = Object.keys(totalsMap).filter(hit).sort();
     let longest = 0, run = 0, prevDate = null;
     for (const d of hitDates) {
       run = (prevDate && addDays(prevDate, 1) === d) ? run + 1 : 1;

@@ -54,6 +54,7 @@ export const api = {
   today: () => request('/hydration/today'),
   history: (days = 7) => request(`/hydration/history?days=${days}`),
   streak: () => request('/hydration/streak'),
+  setHeatMode: (enabled) => request('/hydration/heat-mode', { method: 'POST', body: { enabled } }),
 
   listReminders: () => request('/reminders'),
   addReminder: (timeOfDay) => request('/reminders', { method: 'POST', body: { timeOfDay } }),

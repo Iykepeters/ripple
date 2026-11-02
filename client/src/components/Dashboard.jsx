@@ -106,6 +106,20 @@ export default function Dashboard() {
     setStreak(s);
   }
 
+    async function handleToggleHeat() {
+    try {
+      const turningOn = !today.heatMode;
+      await api.setHeatMode(turningOn);
+      const [t, h, s] = await Promise.all([api.today(), api.history(7), api.streak()]);
+      setToday(t);
+      setHistory(h.history);
+      setStreak(s);
+      showToast(turningOn ? 'Heat mode on ☀️' : 'Heat mode off');
+    } catch (err) {
+      showToast(err.message);
+    }
+  }
+
   async function handleToggleNotif() {
     setNotifBusy(true);
     try {
@@ -173,7 +187,10 @@ export default function Dashboard() {
           </div>
 
           <div className="hero-copy">
-            <h1>Today's hydration</h1>
+            <h1>
+              Today's hydration
+              {today.heatMode && <span className="heat-badge">☀️ Heat mode</span>}
+            </h1>
             <p>Log what you drink as you go — the droplet fills up as you get closer to today's goal.</p>
             <div className="quick-add">
               <button className="qa-btn" onClick={() => addWater(200)}>+200 ml</button>
@@ -192,6 +209,21 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+                {today.heatMode && (
+          <section className="panel heat-panel">
+            <div className="panel-head">
+              <h2>Staying safe in the heat</h2>
+              <span className="eyebrow">Based on NEMA's advisory</span>
+            </div>
+            <ul className="heat-tips">
+              <li>Limit time outdoors between 11am and 4pm. Plan tasks for early morning or late evening.</li>
+              <li>Drink clean water regularly, and check on children, the elderly and others who may struggle in the heat.</li>
+              <li>Seek medical help early if you feel unwell. Ripple is a reminder tool, not medical care.</li>
+            </ul>
+            <div className="heat-note">Follow NiMet and NEMA for official weather alerts.</div>
+          </section>
+        )}
 
         <div className="grid-two">
           <section className="panel">
@@ -261,6 +293,17 @@ export default function Dashboard() {
               <div className="val">{goalDraft} ml</div>
               <button onClick={() => handleGoalChange(100)}>+</button>
             </div>
+          </div>
+          <div className="settings-row">
+            <div>
+              <div className="label">Heat mode ☀️</div>
+              <div className="desc">Adds {today.heatBonusMl} ml to today's goal during hot spells.</div>
+            </div>
+            <button
+              className={`toggle ${today.heatMode ? 'on' : ''}`}
+              onClick={handleToggleHeat}
+              aria-label="Toggle heat mode"
+            />
           </div>
           <div className="settings-row">
             <div>
