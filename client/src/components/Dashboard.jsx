@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../api.js';
 import { enablePush, disablePush } from '../push.js';
 import { getCoords } from '../location.js';
+import ThemeToggle from './ThemeToggle.jsx';
 
 function fmtTime12(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
@@ -190,6 +191,7 @@ export default function Dashboard() {
           <span>Ripple</span>
         </div>
         <div className="top-right">
+            <ThemeToggle />
           <div className="streak-pill">🔥 {streak.current} day streak</div>
           <div className="user-chip">{user.username}</div>
           <button className="logout-btn" onClick={logout}>Log out</button>

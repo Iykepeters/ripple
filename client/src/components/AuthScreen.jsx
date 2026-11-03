@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
+import ThemeToggle from './ThemeToggle.jsx';
 
 export default function AuthScreen() {
   const { login, signup } = useAuth();
@@ -30,6 +31,7 @@ export default function AuthScreen() {
 
   return (
     <div className="auth-wrap">
+       <div className="auth-theme"><ThemeToggle /></div>
       <div className="auth-card">
         <div className="brand">
           <svg viewBox="0 0 24 24" fill="none" width="30" height="30">
