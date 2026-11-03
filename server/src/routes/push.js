@@ -2,10 +2,11 @@ import express from 'express';
 import { pool } from '../db/pool.js';
 import { requireAuth } from '../middleware/auth.js';
 import { webpush } from '../lib/webpush-config.js';
+import { buildReminderMessage } from '../lib/reminder-message.js';
 
 const router = express.Router();
 
-// Public — client needs this to subscribe
+// Public: the client needs this to subscribe
 router.get('/vapid-public-key', (req, res) => {
   res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
 });
@@ -48,7 +49,8 @@ router.post('/unsubscribe', requireAuth, async (req, res) => {
   }
 });
 
-// Send a one-off test notification to every device this user has subscribed
+// Send a one-off test notification to every device this user has subscribed.
+// With Auto heat on and a hot day, the test previews the real morning alert.
 router.post('/test', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
@@ -60,10 +62,24 @@ router.post('/test', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'No push subscriptions found for this account yet.' });
     }
 
-    const payload = JSON.stringify({
-      title: 'Ripple test notification',
-      body: 'If you can see this, push notifications are working! 💧'
+    const userResult = await pool.query(
+      'SELECT timezone, daily_goal_ml, heat_auto, latitude, longitude FROM users WHERE id = $1',
+      [req.userId]
+    );
+    const preview = await buildReminderMessage({
+      ...userResult.rows[0],
+      time_of_day: '',
+      is_first_of_day: true
     });
+    const message =
+      preview.kind === 'heat'
+        ? preview
+        : {
+            title: 'Ripple test notification',
+            body: 'If you can see this, push notifications are working! 💧'
+          };
+
+    const payload = JSON.stringify({ title: message.title, body: message.body });
 
     const sendResults = await Promise.allSettled(
       result.rows.map(sub =>

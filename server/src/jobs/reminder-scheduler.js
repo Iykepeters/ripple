@@ -1,11 +1,22 @@
 import cron from 'node-cron';
 import { pool } from '../db/pool.js';
 import { webpush } from '../lib/webpush-config.js';
+import { buildReminderMessage } from '../lib/reminder-message.js';
 
 async function sendRemindersDueNow() {
   try {
     const { rows } = await pool.query(`
-      SELECT rt.id AS reminder_id, u.id AS user_id, to_char(rt.time_of_day, 'HH24:MI') AS time_of_day
+      SELECT rt.id AS reminder_id,
+             u.id AS user_id,
+             u.timezone,
+             u.daily_goal_ml,
+             u.heat_auto,
+             u.latitude,
+             u.longitude,
+             to_char(rt.time_of_day, 'HH24:MI') AS time_of_day,
+             rt.time_of_day = (
+               SELECT MIN(r2.time_of_day) FROM reminder_times r2 WHERE r2.user_id = u.id
+             ) AS is_first_of_day
       FROM reminder_times rt
       JOIN users u ON u.id = rt.user_id
       WHERE to_char((NOW() AT TIME ZONE u.timezone), 'HH24:MI') = to_char(rt.time_of_day, 'HH24:MI')
@@ -21,10 +32,8 @@ async function sendRemindersDueNow() {
 
       if (subsResult.rows.length === 0) continue;
 
-      const payload = JSON.stringify({
-        title: 'Ripple reminder',
-        body: `It's ${row.time_of_day} — time for a glass of water 💧`
-      });
+      const message = await buildReminderMessage(row);
+      const payload = JSON.stringify({ title: message.title, body: message.body });
 
       for (const sub of subsResult.rows) {
         try {
@@ -34,7 +43,7 @@ async function sendRemindersDueNow() {
           );
         } catch (err) {
           if (err.statusCode === 404 || err.statusCode === 410) {
-            // Subscription expired or the user unsubscribed on the browser side — clean it up
+            // Subscription expired or the user unsubscribed on the browser side: clean it up
             await pool.query('DELETE FROM push_subscriptions WHERE id = $1', [sub.id]);
           } else {
             console.error('Push send error for subscription', sub.id, err.message);
