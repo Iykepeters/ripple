@@ -199,3 +199,11 @@ section.panel{
 .heat-panel{ border-color:#FFDAD4; background:#FFFAF9; }
 .heat-tips{ margin:0; padding-left:18px; color:#3f6b73; font-size:14px; line-height:1.7; }
 .heat-note{ margin-top:12px; font-size:12px; color:#7a9aa0; }
+
+.segmented{ display:inline-flex; border:1.5px solid var(--line); border-radius:100px; overflow:hidden; flex-shrink:0; }
+.segmented button{ background:#fff; border:none; padding:8px 14px; font-size:13px; font-weight:800; color:var(--deep); }
+.segmented button.active{ background:var(--aqua); color:#fff; }
+.segmented button:disabled{ opacity:0.6; }
+.heat-weather{ margin:0 0 12px; font-size:14.5px; color:var(--ink); line-height:1.55; }
+.heat-note a{ color:var(--deep); }
+.settings-note{ font-size:12px; color:#7a9aa0; padding:4px 0 8px; line-height:1.5; }

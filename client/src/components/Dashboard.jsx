@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../api.js';
 import { enablePush, disablePush } from '../push.js';
+import { getCoords } from '../location.js';
 
 function fmtTime12(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
@@ -30,10 +31,18 @@ export default function Dashboard() {
   const [loadingAll, setLoadingAll] = useState(true);
   const [notifOn, setNotifOn] = useState(false);
   const [notifBusy, setNotifBusy] = useState(false);
+  const [heatBusy, setHeatBusy] = useState(false);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(''), 3200);
+  }, []);
+
+  const reloadProgress = useCallback(async () => {
+    const [t, h, s] = await Promise.all([api.today(), api.history(7), api.streak()]);
+    setToday(t);
+    setHistory(h.history);
+    setStreak(s);
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -56,6 +65,15 @@ export default function Dashboard() {
   useEffect(() => {
     if (user) setGoalDraft(user.dailyGoalMl);
   }, [user]);
+
+  // While Auto heat is on, quietly refresh the stored location (no prompt if already allowed).
+  const heatSetting = today?.heatSetting;
+  useEffect(() => {
+    if (heatSetting !== 'auto') return;
+    getCoords({ maximumAge: 6 * 60 * 60 * 1000, timeout: 8000 })
+      .then((coords) => api.updateLocation(coords))
+      .catch(() => {});
+  }, [heatSetting]);
 
   async function addWater(ml) {
     try {
@@ -100,23 +118,27 @@ export default function Dashboard() {
     setGoalDraft(next);
     await api.updateMe({ dailyGoalMl: next });
     await refreshUser();
-    const [t, h, s] = await Promise.all([api.today(), api.history(7), api.streak()]);
-    setToday(t);
-    setHistory(h.history);
-    setStreak(s);
+    await reloadProgress();
   }
 
-    async function handleToggleHeat() {
+  async function handleSetHeat(mode) {
+    if (heatBusy || mode === today.heatSetting) return;
+    setHeatBusy(true);
     try {
-      const turningOn = !today.heatMode;
-      await api.setHeatMode(turningOn);
-      const [t, h, s] = await Promise.all([api.today(), api.history(7), api.streak()]);
-      setToday(t);
-      setHistory(h.history);
-      setStreak(s);
-      showToast(turningOn ? 'Heat mode on ☀️' : 'Heat mode off');
+      const coords = mode === 'auto' ? await getCoords() : {};
+      await api.setHeatMode(mode, coords);
+      await reloadProgress();
+      showToast(
+        mode === 'auto'
+          ? 'Auto heat adjustment on ☀️'
+          : mode === 'manual'
+            ? 'Heat mode on ☀️'
+            : 'Heat adjustment off'
+      );
     } catch (err) {
       showToast(err.message);
+    } finally {
+      setHeatBusy(false);
     }
   }
 
@@ -155,6 +177,8 @@ export default function Dashboard() {
   const percent = today.percent;
   const now = nowHHMM();
   const sortedReminders = [...reminders].sort((a, b) => a.time_of_day.localeCompare(b.time_of_day));
+  const isAuto = today.heatSetting === 'auto';
+  const showTips = today.heatSetting === 'manual' || today.heatBonusMl > 0;
 
   return (
     <div>
@@ -189,7 +213,13 @@ export default function Dashboard() {
           <div className="hero-copy">
             <h1>
               Today's hydration
-              {today.heatMode && <span className="heat-badge">☀️ Heat mode</span>}
+              {today.heatMode && (
+                <span className="heat-badge">
+                  {isAuto
+                    ? `☀️ Auto${today.heatBonusMl > 0 ? ` +${today.heatBonusMl} ml` : ''}`
+                    : '☀️ Heat mode'}
+                </span>
+              )}
             </h1>
             <p>Log what you drink as you go — the droplet fills up as you get closer to today's goal.</p>
             <div className="quick-add">
@@ -210,18 +240,48 @@ export default function Dashboard() {
           </div>
         </div>
 
-                {today.heatMode && (
+        {today.heatMode && (
           <section className="panel heat-panel">
             <div className="panel-head">
-              <h2>Staying safe in the heat</h2>
-              <span className="eyebrow">Based on NEMA's advisory</span>
+              <h2>{isAuto ? "Today's heat in your area" : 'Staying safe in the heat'}</h2>
+              <span className="eyebrow">{isAuto ? 'Weather-adjusted' : "Based on NEMA's advisory"}</span>
             </div>
-            <ul className="heat-tips">
-              <li>Limit time outdoors between 11am and 4pm. Plan tasks for early morning or late evening.</li>
-              <li>Drink clean water regularly, and check on children, the elderly and others who may struggle in the heat.</li>
-              <li>Seek medical help early if you feel unwell. Ripple is a reminder tool, not medical care.</li>
-            </ul>
-            <div className="heat-note">Follow NiMet and NEMA for official weather alerts.</div>
+
+            {isAuto && (
+              <p className="heat-weather">
+                {today.weather ? (
+                  <>
+                    It feels like up to <b>{today.weather.apparentMaxC}°C</b> today, so Ripple{' '}
+                    {today.heatBonusMl > 0 ? (
+                      <>added <b>{today.heatBonusMl} ml</b> to</>
+                    ) : (
+                      'kept'
+                    )}{' '}
+                    your goal.
+                  </>
+                ) : (
+                  "Couldn't reach the weather service right now, so your base goal is unchanged."
+                )}
+              </p>
+            )}
+
+            {showTips && (
+              <ul className="heat-tips">
+                <li>Limit time outdoors between 11am and 4pm. Plan tasks for early morning or late evening.</li>
+                <li>Drink clean water regularly, and check on children, the elderly and others who may struggle in the heat.</li>
+                <li>Seek medical help early if you feel unwell. Ripple is a reminder tool, not medical care.</li>
+              </ul>
+            )}
+
+            <div className="heat-note">
+              Follow NiMet and NEMA for official weather alerts.
+              {isAuto && today.weather && (
+                <>
+                  {' '}Weather data by{' '}
+                  <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo.com</a>.
+                </>
+              )}
+            </div>
           </section>
         )}
 
@@ -283,6 +343,7 @@ export default function Dashboard() {
 
         <section className="panel">
           <div className="panel-head"><h2>Settings</h2></div>
+
           <div className="settings-row">
             <div>
               <div className="label">Daily goal</div>
@@ -294,17 +355,35 @@ export default function Dashboard() {
               <button onClick={() => handleGoalChange(100)}>+</button>
             </div>
           </div>
+
           <div className="settings-row">
             <div>
-              <div className="label">Heat mode ☀️</div>
-              <div className="desc">Adds {today.heatBonusMl} ml to today's goal during hot spells.</div>
+              <div className="label">Heat adjustment ☀️</div>
+              <div className="desc">
+                Manual adds a fixed amount. Auto uses today's weather where you are. Your location is rounded to about 1 km, used only for this, and deleted when you turn Auto off.
+              </div>
             </div>
-            <button
-              className={`toggle ${today.heatMode ? 'on' : ''}`}
-              onClick={handleToggleHeat}
-              aria-label="Toggle heat mode"
-            />
+            <div className="segmented" role="group" aria-label="Heat adjustment">
+              {[
+                ['off', 'Off'],
+                ['manual', `+${today.manualBonusMl} ml`],
+                ['auto', 'Auto']
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className={today.heatSetting === value ? 'active' : ''}
+                  onClick={() => handleSetHeat(value)}
+                  disabled={heatBusy}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
+          <div className="settings-note">
+            Weather-based amounts are a rough guide. If your doctor has set a fluid limit for you, follow that instead of any goal shown here.
+          </div>
+
           <div className="settings-row">
             <div>
               <div className="label">Browser alerts</div>
