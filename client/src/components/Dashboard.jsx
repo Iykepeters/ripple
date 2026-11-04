@@ -5,6 +5,9 @@ import { enablePush, disablePush } from '../push.js';
 import { getCoords } from '../location.js';
 import ThemeToggle from './ThemeToggle.jsx';
 
+const MIN_GOAL_ML = 300;
+const MAX_GOAL_ML = 6000;
+
 function fmtTime12(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
   const period = h >= 12 ? 'PM' : 'AM';
@@ -33,6 +36,7 @@ export default function Dashboard() {
   const [notifOn, setNotifOn] = useState(false);
   const [notifBusy, setNotifBusy] = useState(false);
   const [heatBusy, setHeatBusy] = useState(false);
+  const [emailDraft, setEmailDraft] = useState('');
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -114,12 +118,58 @@ export default function Dashboard() {
     setReminders(r.reminders);
   }
 
-  async function handleGoalChange(delta) {
-    const next = Math.max(300, (goalDraft || 2000) + delta);
-    setGoalDraft(next);
-    await api.updateMe({ dailyGoalMl: next });
-    await refreshUser();
-    await reloadProgress();
+  async function saveGoal(next) {
+    try {
+      setGoalDraft(next);
+      await api.updateMe({ dailyGoalMl: next });
+      await refreshUser();
+      await reloadProgress();
+    } catch (err) {
+      setGoalDraft(user.dailyGoalMl);
+      showToast(err.message);
+    }
+  }
+
+  function handleGoalChange(delta) {
+    const current = Number(goalDraft) || 2000;
+    return saveGoal(Math.max(MIN_GOAL_ML, Math.min(MAX_GOAL_ML, current + delta)));
+  }
+
+  // Called when the person finishes typing their own goal.
+  function handleGoalCommit() {
+    const n = Math.round(Number(goalDraft));
+    if (!Number.isFinite(n) || n < MIN_GOAL_ML || n > MAX_GOAL_ML) {
+      setGoalDraft(user.dailyGoalMl);
+      showToast(`Pick a goal between ${MIN_GOAL_ML} and ${MAX_GOAL_ML} ml.`);
+      return;
+    }
+    if (n === user.dailyGoalMl) {
+      setGoalDraft(n);
+      return;
+    }
+    return saveGoal(n);
+  }
+
+  async function handleSaveEmail() {
+    try {
+      await api.updateMe({ email: emailDraft });
+      await refreshUser();
+      setEmailDraft('');
+      showToast('Email saved ✉️');
+    } catch (err) {
+      showToast(err.message);
+    }
+  }
+
+  async function handleToggleMarketing() {
+    const turningOn = !user.marketingOptIn;
+    try {
+      await api.updateMe({ marketingOptIn: turningOn });
+      await refreshUser();
+      showToast(turningOn ? "You'll get Ripple product updates" : 'Product update emails turned off');
+    } catch (err) {
+      showToast(err.message);
+    }
   }
 
   async function handleSetHeat(mode) {
@@ -191,7 +241,7 @@ export default function Dashboard() {
           <span>Ripple</span>
         </div>
         <div className="top-right">
-            <ThemeToggle />
+          <ThemeToggle />
           <div className="streak-pill">🔥 {streak.current} day streak</div>
           <div className="user-chip">{user.username}</div>
           <button className="logout-btn" onClick={logout}>Log out</button>
@@ -349,12 +399,25 @@ export default function Dashboard() {
           <div className="settings-row">
             <div>
               <div className="label">Daily goal</div>
-              <div className="desc">How much water counts as a completed day.</div>
+              <div className="desc">How much water counts as a completed day. Type your own number, or use − and +.</div>
             </div>
             <div className="goal-control">
-              <button onClick={() => handleGoalChange(-100)}>−</button>
-              <div className="val">{goalDraft} ml</div>
-              <button onClick={() => handleGoalChange(100)}>+</button>
+              <button onClick={() => handleGoalChange(-100)} aria-label="Lower goal by 100 ml">−</button>
+              <input
+                className="goal-input"
+                type="number"
+                inputMode="numeric"
+                min={MIN_GOAL_ML}
+                max={MAX_GOAL_ML}
+                step="50"
+                value={goalDraft}
+                onChange={(e) => setGoalDraft(e.target.value)}
+                onBlur={handleGoalCommit}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                aria-label="Daily goal in millilitres"
+              />
+              <span className="goal-unit">ml</span>
+              <button onClick={() => handleGoalChange(100)} aria-label="Raise goal by 100 ml">+</button>
             </div>
           </div>
 
@@ -405,6 +468,41 @@ export default function Dashboard() {
                 <div className="desc">Confirms delivery is working right now.</div>
               </div>
               <button className="qa-btn" onClick={handleTestNotif}>Send test</button>
+            </div>
+          )}
+
+          <div className="settings-row">
+            <div>
+              <div className="label">Email</div>
+              <div className="desc">
+                {user.email ? user.email : 'Add an email so we can reach you about your account.'}
+              </div>
+            </div>
+            {!user.email && (
+              <div className="email-add">
+                <input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={emailDraft}
+                  onChange={(e) => setEmailDraft(e.target.value)}
+                  aria-label="Email address"
+                />
+                <button className="qa-btn" onClick={handleSaveEmail}>Save</button>
+              </div>
+            )}
+          </div>
+
+          {user.email && (
+            <div className="settings-row">
+              <div>
+                <div className="label">Product updates by email</div>
+                <div className="desc">Hydration tips and news from Ripple. You can turn this off any time.</div>
+              </div>
+              <button
+                className={`toggle ${user.marketingOptIn ? 'on' : ''}`}
+                onClick={handleToggleMarketing}
+                aria-label="Toggle product update emails"
+              />
             </div>
           )}
         </section>

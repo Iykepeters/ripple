@@ -6,19 +6,41 @@ export default function AuthScreen() {
   const { login, signup } = useAuth();
   const [mode, setMode] = useState('login');
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [goal, setGoal] = useState(2000);
+  const [confirm, setConfirm] = useState('');
+  const [marketing, setMarketing] = useState(false); // never pre-ticked
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const isSignup = mode === 'signup';
+
+  function switchMode() {
+    setMode(isSignup ? 'login' : 'signup');
+    setError('');
+    setConfirm('');
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+
+    if (isSignup) {
+      if (password.length < 8) {
+        setError('Password must be at least 8 characters.');
+        return;
+      }
+      if (password !== confirm) {
+        setError('Passwords do not match.');
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
-      if (mode === 'signup') {
+      if (isSignup) {
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        await signup(username, password, Number(goal), timezone);
+        await signup(username, password, email, marketing, timezone);
       } else {
         await login(username, password);
       }
@@ -31,7 +53,7 @@ export default function AuthScreen() {
 
   return (
     <div className="auth-wrap">
-       <div className="auth-theme"><ThemeToggle /></div>
+      <div className="auth-theme"><ThemeToggle /></div>
       <div className="auth-card">
         <div className="brand">
           <svg viewBox="0 0 24 24" fill="none" width="30" height="30">
@@ -41,7 +63,7 @@ export default function AuthScreen() {
         </div>
         <p className="tag">Small sips, on schedule.</p>
 
-        <h1>{mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
+        <h1>{isSignup ? 'Create your account' : 'Welcome back'}</h1>
 
         {error && <div className="auth-error">{error}</div>}
 
@@ -53,9 +75,27 @@ export default function AuthScreen() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="e.g. amara"
+              autoComplete="username"
               required
             />
           </div>
+
+          {isSignup && (
+            <div className="field">
+              <label htmlFor="email">Email</label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                required
+              />
+              <div className="field-hint">Used for important messages about your account.</div>
+            </div>
+          )}
+
           <div className="field">
             <label htmlFor="password">Password</label>
             <input
@@ -64,34 +104,53 @@ export default function AuthScreen() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
+              autoComplete={isSignup ? 'new-password' : 'current-password'}
               required
             />
+            {isSignup && <div className="field-hint">At least 8 characters.</div>}
           </div>
-          {mode === 'signup' && (
+
+          {isSignup && (
             <div className="field">
-              <label htmlFor="goal">Daily hydration goal (ml)</label>
+              <label htmlFor="confirm">Confirm password</label>
               <input
-                id="goal"
-                type="number"
-                min="500"
-                step="100"
-                value={goal}
-                onChange={(e) => setGoal(e.target.value)}
+                id="confirm"
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="new-password"
+                required
               />
             </div>
           )}
+
+          {isSignup && (
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={marketing}
+                onChange={(e) => setMarketing(e.target.checked)}
+              />
+              <span>
+                Send me hydration tips, product news and updates from Ripple by email.
+                Optional. You can turn this off any time in Settings.
+              </span>
+            </label>
+          )}
+
           <button type="submit" className="btn-primary" disabled={submitting}>
-            {submitting ? 'Please wait…' : mode === 'login' ? 'Log in' : 'Sign up'}
+            {submitting ? 'Please wait…' : isSignup ? 'Sign up' : 'Log in'}
           </button>
         </form>
 
         <div className="switch-line">
-          <span>{mode === 'login' ? 'New to Ripple?' : 'Already have an account?'}</span>
-          <button type="button" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-            {mode === 'login' ? 'Create an account' : 'Log in instead'}
+          <span>{isSignup ? 'Already have an account?' : 'New to Ripple?'}</span>
+          <button type="button" onClick={switchMode}>
+            {isSignup ? 'Log in instead' : 'Create an account'}
           </button>
         </div>
       </div>
     </div>
   );
-}54
+}

@@ -19,8 +19,8 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const signup = useCallback(async (username, password, dailyGoalMl, timezone) => {
-    const data = await api.signup(username, password, dailyGoalMl, timezone);
+  const signup = useCallback(async (username, password, email, marketingOptIn, timezone) => {
+    const data = await api.signup(username, password, email, marketingOptIn, timezone);
     setToken(data.token);
     setUser(data.user);
   }, []);
