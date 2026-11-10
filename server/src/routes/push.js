@@ -1,8 +1,8 @@
 import express from 'express';
 import { pool } from '../db/pool.js';
 import { requireAuth } from '../middleware/auth.js';
-import { webpush } from '../lib/webpush-config.js';
 import { buildReminderMessage } from '../lib/reminder-message.js';
+import { sendPush, TEST_PUSH_OPTIONS } from '../lib/send-push.js';
 
 const router = express.Router();
 
@@ -32,7 +32,27 @@ router.post('/subscribe', requireAuth, async (req, res) => {
   }
 });
 
-// Remove a subscription (e.g. user turns alerts off)
+// Does the server have this device's subscription saved for the logged-in user?
+// The dashboard uses this so the alerts toggle always shows the truth.
+router.post('/status', requireAuth, async (req, res) => {
+  const { endpoint } = req.body;
+  if (!endpoint || typeof endpoint !== 'string') {
+    return res.status(400).json({ error: 'endpoint is required.' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT 1 FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2',
+      [endpoint, req.userId]
+    );
+    res.json({ subscribed: result.rows.length > 0 });
+  } catch (err) {
+    console.error('Push status error:', err);
+    res.status(500).json({ error: 'Something went wrong checking your alert status.' });
+  }
+});
+
+// Remove a subscription (e.g. user turns alerts off, or logs out)
 router.post('/unsubscribe', requireAuth, async (req, res) => {
   const { endpoint } = req.body;
   if (!endpoint) return res.status(400).json({ error: 'endpoint is required.' });
@@ -54,7 +74,7 @@ router.post('/unsubscribe', requireAuth, async (req, res) => {
 router.post('/test', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1',
+      'SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1',
       [req.userId]
     );
 
@@ -79,19 +99,15 @@ router.post('/test', requireAuth, async (req, res) => {
             body: 'If you can see this, push notifications are working! 💧'
           };
 
-    const payload = JSON.stringify({ title: message.title, body: message.body });
-
-    const sendResults = await Promise.allSettled(
-      result.rows.map(sub =>
-        webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
-        )
-      )
+    const outcomes = await Promise.all(
+      result.rows.map((sub) => sendPush(sub, message, TEST_PUSH_OPTIONS))
     );
 
-    const failures = sendResults.filter(r => r.status === 'rejected');
-    res.json({ sent: sendResults.length - failures.length, failed: failures.length });
+    res.json({
+      sent: outcomes.filter((o) => o === 'sent').length,
+      expired: outcomes.filter((o) => o === 'expired').length,
+      failed: outcomes.filter((o) => o === 'failed').length
+    });
   } catch (err) {
     console.error('Test push error:', err);
     res.status(500).json({ error: 'Something went wrong sending the test notification.' });

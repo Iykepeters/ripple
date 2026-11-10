@@ -64,5 +64,6 @@ export const api = {
   getVapidPublicKey: () => request('/push/vapid-public-key', { auth: false }),
   subscribePush: (subscription) => request('/push/subscribe', { method: 'POST', body: subscription }),
   unsubscribePush: (endpoint) => request('/push/unsubscribe', { method: 'POST', body: { endpoint } }),
+  pushStatus: (endpoint) => request('/push/status', { method: 'POST', body: { endpoint } }),
   testPush: () => request('/push/test', { method: 'POST' })
 };

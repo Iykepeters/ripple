@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../api.js';
-import { enablePush, disablePush } from '../push.js';
+import { enablePush, disablePush, syncPush } from '../push.js';
 import { getCoords } from '../location.js';
 import ThemeToggle from './ThemeToggle.jsx';
 
@@ -33,7 +33,8 @@ export default function Dashboard() {
   const [goalDraft, setGoalDraft] = useState(user?.dailyGoalMl || 2000);
   const [toast, setToast] = useState('');
   const [loadingAll, setLoadingAll] = useState(true);
-  const [notifOn, setNotifOn] = useState(false);
+  const [notifStatus, setNotifStatus] = useState('checking'); // checking | on | off | blocked | unsupported
+  const notifOn = notifStatus === 'on';
   const [notifBusy, setNotifBusy] = useState(false);
   const [heatBusy, setHeatBusy] = useState(false);
   const [emailDraft, setEmailDraft] = useState('');
@@ -79,6 +80,26 @@ export default function Dashboard() {
       .then((coords) => api.updateLocation(coords))
       .catch(() => {});
   }, [heatSetting]);
+
+  // Keep the alerts toggle truthful, and quietly reconnect this device if its subscription lapsed.
+  const userId = user?.id;
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    const run = () =>
+      syncPush(api, userId).then((status) => {
+        if (!cancelled && status !== 'unknown') setNotifStatus(status);
+      });
+    run();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') run();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [userId]);
 
   async function addWater(ml) {
     try {
@@ -194,19 +215,32 @@ export default function Dashboard() {
   }
 
   async function handleToggleNotif() {
+    if (notifStatus === 'unsupported') {
+      showToast("This browser can't receive push alerts. Try Chrome, or install Ripple to your home screen.");
+      return;
+    }
+    if (notifStatus === 'blocked') {
+      showToast('Notifications are blocked for Ripple. Allow them in your browser or phone settings, then try again.');
+      return;
+    }
+
     setNotifBusy(true);
     try {
       if (!notifOn) {
-        await enablePush(api);
-        setNotifOn(true);
+        await enablePush(api, user.id);
+        setNotifStatus('on');
         showToast('Browser alerts turned on 🔔');
       } else {
-        await disablePush(api);
-        setNotifOn(false);
+        await disablePush(api, user.id);
+        setNotifStatus('off');
         showToast('Browser alerts turned off');
       }
     } catch (err) {
       showToast(err.message);
+      // The permission may just have been denied: show the real state.
+      syncPush(api, user.id).then((status) => {
+        if (status !== 'unknown') setNotifStatus(status);
+      });
     } finally {
       setNotifBusy(false);
     }
@@ -215,7 +249,22 @@ export default function Dashboard() {
   async function handleTestNotif() {
     try {
       const result = await api.testPush();
-      showToast(`Test sent to ${result.sent} device${result.sent === 1 ? '' : 's'}`);
+      if (result.sent > 0) {
+        showToast(`Test sent to ${result.sent} device${result.sent === 1 ? '' : 's'}`);
+        return;
+      }
+      if (result.expired > 0) {
+        // This device's connection had expired. Reconnect it automatically.
+        const status = await syncPush(api, user.id);
+        if (status !== 'unknown') setNotifStatus(status);
+        showToast(
+          status === 'on'
+            ? 'Alerts reconnected. Tap Send test again.'
+            : 'This device lost its alert connection. Turn alerts off and on again.'
+        );
+        return;
+      }
+      showToast('The test could not be delivered. Please try again in a moment.');
     } catch (err) {
       showToast(err.message);
     }
@@ -230,6 +279,13 @@ export default function Dashboard() {
   const sortedReminders = [...reminders].sort((a, b) => a.time_of_day.localeCompare(b.time_of_day));
   const isAuto = today.heatSetting === 'auto';
   const showTips = today.heatSetting === 'manual' || today.heatBonusMl > 0;
+  const notifDescription = {
+    on: "On for this device. You'll get a notification at each reminder time, even when Ripple is closed.",
+    off: 'Off for this device. Turn on to get a notification at each reminder time, even when Ripple is closed.',
+    blocked: "Blocked for Ripple in your browser or phone settings. Allow notifications for this site, then come back and turn this on.",
+    unsupported: "This browser can't receive push alerts. Try Chrome, or install Ripple to your home screen.",
+    checking: 'Checking this device…'
+  }[notifStatus];
 
   return (
     <div>
@@ -452,12 +508,12 @@ export default function Dashboard() {
           <div className="settings-row">
             <div>
               <div className="label">Browser alerts</div>
-              <div className="desc">Get a real push notification at each scheduled time — works even if this tab is closed.</div>
+              <div className="desc">{notifDescription}</div>
             </div>
             <button
               className={`toggle ${notifOn ? 'on' : ''}`}
               onClick={handleToggleNotif}
-              disabled={notifBusy}
+              disabled={notifBusy || notifStatus === 'checking'}
               aria-label="Toggle browser alerts"
             />
           </div>

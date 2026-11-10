@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { api, setToken, loadStoredToken } from '../api.js';
+import { detachPush } from '../push.js';
 
 const AuthContext = createContext(null);
 
@@ -31,7 +32,13 @@ export function AuthProvider({ children }) {
     setUser(data.user);
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // Stop this device receiving the account's reminders. Never block logging out if it fails.
+    try {
+      await detachPush(api);
+    } catch {
+      /* ignore */
+    }
     setToken(null);
     setUser(null);
   }, []);
